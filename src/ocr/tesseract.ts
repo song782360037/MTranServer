@@ -82,7 +82,7 @@ async function initWorker(lang: string): Promise<void> {
           }
         },
         // Only set langPath, let tesseract.js use local worker/core from node_modules
-        langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+        langPath: 'https://tessdata.projectnaptha.com/4.0.0_fast',
       });
 
       currentLang = tessLang;

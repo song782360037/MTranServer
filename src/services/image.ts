@@ -1,8 +1,14 @@
 import * as logger from '@/logger/index.js';
-import { recognizeImage, OCRResult } from '@/ocr/tesseract.js';
+import { recognizeImage, OCRResult, TextBlock } from '@/ocr/tesseract.js';
 import { renderTranslatedImageSimple, TranslatedBlock, RenderOptions } from '@/ocr/renderer.js';
 import { translateWithPivot } from './engine.js';
 import { detectLanguage } from './detector.js';
+import sharp from 'sharp';
+
+// Max image dimension for OCR (larger images will be scaled down)
+const MAX_IMAGE_DIMENSION = 2000;
+// Max concurrent translations
+const MAX_CONCURRENT_TRANSLATIONS = 10;
 
 export interface ImageTranslateOptions {
   fromLang?: string;
@@ -30,6 +36,9 @@ export async function translateImage(
 
   logger.info(`Starting image translation: ${fromLang} -> ${toLang}`);
 
+  // Step 0: Preprocess image (scale down if too large)
+  const { processedBuffer, scale } = await preprocessImage(imageBuffer);
+  
   // Step 1: Detect source language if auto
   let effectiveFromLang = fromLang;
   if (fromLang === 'auto') {
@@ -46,7 +55,7 @@ export async function translateImage(
 
   // Step 2: Perform OCR with detected/specified language
   logger.info(`Performing OCR with language: ${effectiveFromLang}`);
-  const ocrResult = await recognizeImage(imageBuffer, effectiveFromLang);
+  const ocrResult = await recognizeImage(processedBuffer, effectiveFromLang);
 
   if (ocrResult.blocks.length === 0) {
     logger.info('No text blocks found in image');
@@ -59,39 +68,18 @@ export async function translateImage(
 
   logger.info(`Found ${ocrResult.blocks.length} text blocks to translate`);
 
-  // Step 3: Translate each text block
-  const translatedBlocks: TranslatedBlock[] = [];
-  const translations: Array<{ original: string; translated: string }> = [];
+  // Step 3: Translate text blocks in parallel batches
+  const translatedBlocks = await translateBlocksParallel(
+    ocrResult.blocks,
+    effectiveFromLang,
+    toLang,
+    scale
+  );
 
-  for (const block of ocrResult.blocks) {
-    try {
-      const translated = await translateWithPivot(
-        effectiveFromLang,
-        toLang,
-        block.text,
-        false
-      );
-
-      translatedBlocks.push({
-        ...block,
-        translatedText: translated,
-      });
-
-      translations.push({
-        original: block.text,
-        translated,
-      });
-
-      logger.debug(`Translated: "${block.text}" -> "${translated}"`);
-    } catch (error) {
-      logger.warn(`Failed to translate block: ${error}`);
-      // Keep original text on error
-      translatedBlocks.push({
-        ...block,
-        translatedText: block.text,
-      });
-    }
-  }
+  const translations = translatedBlocks.map(b => ({
+    original: b.text,
+    translated: b.translatedText,
+  }));
 
   // Step 4: Render translated text onto image
   logger.info('Rendering translated text onto image');
@@ -130,4 +118,88 @@ export async function extractTextFromImage(
   }
 
   return recognizeImage(imageBuffer, effectiveLang);
+}
+
+/**
+ * Preprocess image: scale down if too large
+ */
+async function preprocessImage(imageBuffer: Buffer): Promise<{ processedBuffer: Buffer; scale: number }> {
+  const metadata = await sharp(imageBuffer).metadata();
+  const width = metadata.width || 0;
+  const height = metadata.height || 0;
+  
+  const maxDim = Math.max(width, height);
+  
+  if (maxDim <= MAX_IMAGE_DIMENSION) {
+    return { processedBuffer: imageBuffer, scale: 1 };
+  }
+  
+  const scale = MAX_IMAGE_DIMENSION / maxDim;
+  const newWidth = Math.round(width * scale);
+  const newHeight = Math.round(height * scale);
+  
+  logger.info(`Scaling image from ${width}x${height} to ${newWidth}x${newHeight} (scale: ${scale.toFixed(2)})`);
+  
+  const processedBuffer = await sharp(imageBuffer)
+    .resize(newWidth, newHeight, { fit: 'inside' })
+    .toBuffer();
+  
+  return { processedBuffer, scale };
+}
+
+/**
+ * Translate text blocks in parallel batches
+ */
+async function translateBlocksParallel(
+  blocks: TextBlock[],
+  fromLang: string,
+  toLang: string,
+  scale: number
+): Promise<TranslatedBlock[]> {
+  const results: TranslatedBlock[] = [];
+  
+  // Process in batches for controlled parallelism
+  for (let i = 0; i < blocks.length; i += MAX_CONCURRENT_TRANSLATIONS) {
+    const batch = blocks.slice(i, i + MAX_CONCURRENT_TRANSLATIONS);
+    
+    const batchPromises = batch.map(async (block): Promise<TranslatedBlock> => {
+      try {
+        const translated = await translateWithPivot(fromLang, toLang, block.text, false);
+        logger.debug(`Translated: "${block.text.substring(0, 30)}..." -> "${translated.substring(0, 30)}..."`);
+        
+        // Scale bbox back to original image coordinates if image was scaled
+        const scaledBlock = scale !== 1 ? {
+          ...block,
+          bbox: {
+            x0: Math.round(block.bbox.x0 / scale),
+            y0: Math.round(block.bbox.y0 / scale),
+            x1: Math.round(block.bbox.x1 / scale),
+            y1: Math.round(block.bbox.y1 / scale),
+          },
+          fontSize: Math.round(block.fontSize / scale),
+          lineHeight: Math.round(block.lineHeight / scale),
+        } : block;
+        
+        return {
+          ...scaledBlock,
+          translatedText: translated,
+        };
+      } catch (error) {
+        logger.warn(`Failed to translate block: ${error}`);
+        return {
+          ...block,
+          translatedText: block.text,
+        };
+      }
+    });
+    
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults);
+    
+    if (i + MAX_CONCURRENT_TRANSLATIONS < blocks.length) {
+      logger.debug(`Translated batch ${Math.floor(i / MAX_CONCURRENT_TRANSLATIONS) + 1}, ${results.length}/${blocks.length} done`);
+    }
+  }
+  
+  return results;
 }

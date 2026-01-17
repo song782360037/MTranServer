@@ -22,6 +22,13 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 
 FROM node:22-alpine
 
+# Install dependencies for sharp (image processing)
+RUN apk add --no-cache \
+    vips-dev \
+    fftw-dev \
+    build-base \
+    python3
+
 WORKDIR /app
 
 COPY --from=builder /app/dist ./
