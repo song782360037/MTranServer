@@ -13,6 +13,7 @@ import { uiStatic } from '@/middleware/ui.js';
 import { swaggerStatic } from '@/middleware/swagger.js';
 import { checkForUpdate } from '@/utils/update-checker.js';
 import { VERSION } from '@/version';
+import imageRouter from '@/routes/image.js';
 
 export async function startServer({ handleSignals = true } = {}) {
   const config = getConfig();
@@ -150,6 +151,9 @@ export async function startServer({ handleSignals = true } = {}) {
   });
 
   RegisterRoutes(app);
+
+  // Image translation routes (file upload)
+  app.use('/image', imageRouter);
 
   app.use('/ui', (req: Request, res: Response, next: NextFunction) => {
     if (req.originalUrl === '/ui') {

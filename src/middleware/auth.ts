@@ -1,6 +1,32 @@
 import { Request, Response, NextFunction } from 'express';
 import { getConfig } from '@/config/index.js';
 
+/**
+ * Express middleware for API token authentication
+ */
+export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const apiToken = getConfig().apiToken;
+  
+  if (!apiToken) {
+    next();
+    return;
+  }
+
+  const headerToken = req.headers['authorization']?.replace('Bearer ', '');
+  const queryToken = req.query.api_token as string;
+  const queryToken2 = req.query.token as string;
+  const xApiToken = req.headers['x-api-token'] as string;
+
+  const token = headerToken || queryToken || queryToken2 || xApiToken;
+
+  if (token !== apiToken) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  next();
+}
+
 export function auth(apiToken: string) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!apiToken) {
