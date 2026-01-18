@@ -61,7 +61,8 @@ if (isLib) {
 
 if (isNode) {
   console.log("Building for Node...");
-  await $`bun build src/main.ts src/desktop.ts --outdir dist --target node --format esm --minify`;
+  // 不使用 --minify，避免 iconv-lite 等库的字符编码表被破坏
+  await $`bun build src/main.ts src/desktop.ts --outdir dist --target node --format esm`;
   console.log("Build complete!");
   process.exit(0);
 }
