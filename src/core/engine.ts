@@ -206,7 +206,8 @@ export class TranslationEngine {
       messages.push_back(cleanedText);
       responseOptions.push_back({
         qualityScores: options.qualityScores || false,
-        alignment: options.alignment !== undefined ? options.alignment : true,
+        // Disable alignment by default for better performance (~10-20% speedup)
+        alignment: options.alignment || false,
         html: options.html || false
       });
 

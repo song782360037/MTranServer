@@ -56,18 +56,14 @@ export class TranslateController extends Controller {
 
     const normalizedFrom = NormalizeLanguageCode(body.from);
     const normalizedTo = NormalizeLanguageCode(body.to);
+    const isHtml = body.html || false;
 
-    const results: string[] = [];
-
-    for (let i = 0; i < body.texts.length; i++) {
-      const result = await translateWithPivot(
-        normalizedFrom,
-        normalizedTo,
-        body.texts[i],
-        body.html || false
-      );
-      results.push(result);
-    }
+    // Parallel translation for better performance
+    const results = await Promise.all(
+      body.texts.map(text =>
+        translateWithPivot(normalizedFrom, normalizedTo, text, isHtml)
+      )
+    );
 
     return { results };
   }

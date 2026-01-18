@@ -41,21 +41,34 @@ export async function translateImage(
   
   // Step 1: Detect source language if auto
   let effectiveFromLang = fromLang;
+  let ocrResult: OCRResult;
+  
   if (fromLang === 'auto') {
-    // Do a quick OCR to detect language
-    const quickOcr = await recognizeImage(imageBuffer, 'eng');
+    // Do a quick OCR with 'eng' to detect language
+    const quickOcr = await recognizeImage(processedBuffer, 'eng');
     if (quickOcr.text.trim()) {
       effectiveFromLang = await detectLanguage(quickOcr.text);
       logger.info(`Auto-detected source language: ${effectiveFromLang}`);
+      
+      // Optimization: Reuse quickOcr result if detected language is English
+      if (effectiveFromLang === 'en') {
+        ocrResult = quickOcr;
+        logger.info('Reusing English OCR result (avoiding duplicate OCR)');
+      } else {
+        // Need to re-OCR with correct language for better accuracy
+        logger.info(`Performing OCR with language: ${effectiveFromLang}`);
+        ocrResult = await recognizeImage(processedBuffer, effectiveFromLang);
+      }
     } else {
       effectiveFromLang = 'en';
       logger.info(`No text detected, defaulting to: ${effectiveFromLang}`);
+      ocrResult = quickOcr; // Reuse the empty result
     }
+  } else {
+    // Step 2: Perform OCR with specified language
+    logger.info(`Performing OCR with language: ${effectiveFromLang}`);
+    ocrResult = await recognizeImage(processedBuffer, effectiveFromLang);
   }
-
-  // Step 2: Perform OCR with detected/specified language
-  logger.info(`Performing OCR with language: ${effectiveFromLang}`);
-  const ocrResult = await recognizeImage(processedBuffer, effectiveFromLang);
 
   if (ocrResult.blocks.length === 0) {
     logger.info('No text blocks found in image');

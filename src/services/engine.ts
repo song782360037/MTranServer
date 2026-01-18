@@ -226,8 +226,23 @@ export async function translateWithPivot(
     return text;
   }
 
-  if (fromLang !== 'auto' && text.length <= 512) {
+  // Optimization: Skip multi-language detection for short texts or when source language is specified
+  if (fromLang !== 'auto') {
+    const config = getConfig();
+    if (text.length > config.maxSentenceLength && !isHTML) {
+      return translateLongText(fromLang, toLang, text);
+    }
     return translateSegment(fromLang, toLang, text, isHTML);
+  }
+
+  // Auto-detect: Only perform multi-language detection for long texts
+  if (text.length <= 512) {
+    const detected = await detectLanguage(text);
+    const effectiveFromLang = detected || 'en';
+    if (effectiveFromLang === toLang) {
+      return text;
+    }
+    return translateSegment(effectiveFromLang, toLang, text, isHTML);
   }
 
   const config = getConfig();
@@ -259,25 +274,32 @@ export async function translateWithPivot(
   }
 
   logger.debug(`Detected ${segments.length} language segments`);
+  
+  // Parallel translation of all segments
+  const translationPromises = segments.map(async (seg, index) => {
+    if (seg.language === toLang) {
+      return { index, text: seg.text, start: seg.start, end: seg.end };
+    }
+    try {
+      const translated = await translateSegment(seg.language, toLang, seg.text, isHTML);
+      return { index, text: translated, start: seg.start, end: seg.end };
+    } catch (error) {
+      logger.error(`Failed to translate segment ${index}: ${error}`);
+      return { index, text: seg.text, start: seg.start, end: seg.end };
+    }
+  });
+  
+  const translatedSegments = await Promise.all(translationPromises);
+  
+  // Reconstruct result preserving order and gaps
   let result = '';
   let lastEnd = 0;
-
-  for (const seg of segments) {
+  
+  for (const seg of translatedSegments) {
     if (seg.start > lastEnd) {
       result += text.substring(lastEnd, seg.start);
     }
-
-    if (seg.language === toLang) {
-      result += seg.text;
-    } else {
-      try {
-        const translated = await translateSegment(seg.language, toLang, seg.text, isHTML);
-        result += translated;
-      } catch (error) {
-        logger.error(`Failed to translate segment: ${error}`);
-        result += seg.text;
-      }
-    }
+    result += seg.text;
     lastEnd = seg.end;
   }
 
@@ -300,20 +322,29 @@ async function translateLongText(
 
   logger.debug(`Split into ${sentences.length} sentences`);
 
-  const results: string[] = [];
+  // Parallel translation with controlled concurrency
+  const BATCH_SIZE = 10;
+  const results: string[] = new Array(sentences.length);
 
-  for (let i = 0; i < sentences.length; i++) {
-    const { segment } = sentences[i];
-    try {
-      const translated = await translateSegment(fromLang, toLang, segment, false);
-      results.push(translated);
-
-      if ((i + 1) % 10 === 0) {
-        logger.debug(`Translated ${i + 1}/${sentences.length} sentences`);
-      }
-    } catch (error) {
-      logger.error(`Failed to translate sentence ${i + 1}: ${error}`);
-      results.push(segment);
+  for (let i = 0; i < sentences.length; i += BATCH_SIZE) {
+    const batch = sentences.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(
+      batch.map(async ({ segment }, idx) => {
+        try {
+          return await translateSegment(fromLang, toLang, segment, false);
+        } catch (error) {
+          logger.error(`Failed to translate sentence ${i + idx + 1}: ${error}`);
+          return segment;
+        }
+      })
+    );
+    
+    for (let j = 0; j < batchResults.length; j++) {
+      results[i + j] = batchResults[j];
+    }
+    
+    if (i + BATCH_SIZE < sentences.length) {
+      logger.debug(`Translated ${Math.min(i + BATCH_SIZE, sentences.length)}/${sentences.length} sentences`);
     }
   }
 

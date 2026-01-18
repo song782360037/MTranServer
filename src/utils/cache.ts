@@ -10,18 +10,24 @@ const cache = new LRUCache<string, string>({
   max: config.cacheSize > 0 ? config.cacheSize : 1,
 });
 
+// Threshold for using simple concatenation vs SHA1 hash
+const SIMPLE_KEY_THRESHOLD = 200;
+
 /**
  * Generates a collision-resistant cache key from arguments.
- * Uses a null character separator to distinguish boundaries.
+ * Uses simple concatenation for short keys, SHA1 for longer ones.
  */
 function getCacheKey(args: any[]): string {
-  const hash = crypto.createHash('sha1');
-  for (const arg of args) {
-    hash.update(String(arg));
-    // Use a null character as a separator to prevent collisions
-    // e.g. ["ab", "c"] vs ["a", "bc"]
-    hash.update('\0');
+  // For short inputs, direct concatenation is faster than hashing
+  const simpleKey = args.map(arg => String(arg)).join('\0');
+  
+  if (simpleKey.length <= SIMPLE_KEY_THRESHOLD) {
+    return simpleKey;
   }
+  
+  // For longer inputs, use SHA1 to keep key size manageable
+  const hash = crypto.createHash('sha1');
+  hash.update(simpleKey);
   return hash.digest('hex');
 }
 
