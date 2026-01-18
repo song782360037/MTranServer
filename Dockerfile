@@ -31,7 +31,12 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
+# 复制 package.json 用于安装外部依赖
+COPY --from=builder /app/package.json ./
 COPY --from=builder /app/dist ./
+
+# 安装 tesseract.js（作为外部依赖，未打包进 main.js）
+RUN npm install tesseract.js --omit=dev
 
 ENV MT_HOST=0.0.0.0 \
     MT_PORT=8989 \

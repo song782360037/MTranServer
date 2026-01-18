@@ -61,8 +61,8 @@ if (isLib) {
 
 if (isNode) {
   console.log("Building for Node...");
-  // 不使用 --minify，避免 iconv-lite 等库的字符编码表被破坏
-  await $`bun build src/main.ts src/desktop.ts --outdir dist --target node --format esm`;
+  // tesseract.js 依赖 iconv-lite，其字符编码表在打包时会被破坏，需设为外部依赖
+  await $`bun build src/main.ts src/desktop.ts --outdir dist --target node --format esm --external tesseract.js`;
   console.log("Build complete!");
   process.exit(0);
 }
